@@ -1,0 +1,1292 @@
+/* ---------------------------------------------------- */
+/*                 GETTING API RESULTS                  */
+/* -----------------------------------------------------*/
+
+
+
+let references = null;
+let listPanel = document.querySelector("#listPanel");
+let singlePanel = document.querySelector("#singlePanel");
+let paginationPanel = document.querySelector('#paginationPanel');
+let form = document.querySelector("#noticesSelector");
+let noticesResults = document.querySelector("#noticesResults");
+let noticesResultsItemList = noticesResults.querySelector('#noticesResultsItemList');
+
+if(navigator.userAgent.indexOf('MSIE')!==-1
+    || navigator.appVersion.indexOf('Trident/') > -1){
+    form =null;
+
+    document.querySelector('#singleLinkPanelTemplate').setAttribute("style", "display : none");
+    document.querySelector('#singlePanelTemplate').setAttribute("style", "display :none");
+    document.querySelector('#paginationTemplate').setAttribute("style", "display : none");
+    document.querySelector('#singleAliasPanelTemplate').setAttribute("style", "display : none");
+    document.querySelector('#listResultsTemplate').setAttribute("style", "display : none");
+    document.querySelector('#singleLeaderPanelTemplate').setAttribute("style", "display : none");
+    document.querySelector('#noSearchResults').innerHTML ="This section of the website is not optimized for users of IE11. To view the data correctly, we recommend Edge or another browser.";
+
+}
+
+
+// Using the form to identify we are on the page
+if (form !== null) {
+
+    // On page load
+    document.addEventListener('readystatechange', function(evt) {
+        switch (evt.target.readyState) {
+            case "loading":
+                // The document is still loading.
+                break;
+            case "interactive":
+                singlePanel.classList.add('hidden');// We load the API references
+                references = JSON.parse(document.querySelector('.wantedpersons--container').dataset.references);
+                let url = form.dataset.api;
+
+                // We get the list display
+                getApiResponse(url, function (data) {
+                    // We calculate the totalResults once and for all here
+                    listPanel.querySelector('#totalResults').textContent = data.total;
+                    fillAndDisplayListTemplate(data);
+                });
+
+                // We get a single display corresponding to the anchor if there is one
+                let anchor = document.URL.split('#');
+                if (anchor.length > 1 && anchor[1].length > 0) {
+                    url += '/' + anchor[1];
+                    getApiResponse(url, function (data) {
+                        fillAndDisplaySingleTemplate(data);
+                        // TODO : pretty animation ?
+                        listPanel.classList.add('hidden');
+                        singlePanel.classList.remove('hidden');
+                        window.scrollTo(0, 0);
+                    });
+                }
+                // The document has finished loading. We can now access the DOM elements.
+                break;
+            case "complete":
+                // The document and all sub-resources have finished loading.
+                break;
+        }
+    }, false);
+
+    // List panel : events in the results list
+    noticesResults.addEventListener('click', function (e) {
+        let element = e.target;
+        // On click on pagination links
+        if (element.matches('.counter .counter__wrap a, .counter .counter__wrap a *')) {
+            e.preventDefault();
+            if (!element.dataset.disabled) {
+                let url = element.closest('a').href;
+                getApiResponse(url, function (data) {
+                    fillAndDisplayListTemplate(data);
+                    scrollToNoticesListTop();
+                });
+            }
+        }
+        // On click on links leading to single page
+        if (element.matches('.redNoticeItem__labelText, .redNoticeItem__labelText *')) {
+            e.preventDefault();
+            if (!element.dataset.disabled) {
+                let link = element.closest('a');
+                let url = link.dataset.singleurl;
+                getApiResponse(url, function (data) {
+                    fillAndDisplaySingleTemplate(data);
+                    // TODO : pretty animation ?
+                    listPanel.classList.add('hidden');
+                    singlePanel.classList.remove('hidden');
+                    window.scrollTo(0, 0);
+                    history.pushState({id: data.entity_id}, null, link.href);
+                });
+            }
+        }
+    }, false);
+
+    // List panel : event on form submission
+    form.addEventListener('submit', function (e) {
+        e.preventDefault();
+        let url = form.dataset.api;
+        url += getApiUrlParameters(this);
+        getApiResponse(url, function (data) {
+            fillAndDisplayListTemplate(data);
+            scrollToNoticesListTop();
+        });
+    }, false);
+
+    // Single panel : back to list button
+    singlePanel.addEventListener('click', function (e) {
+        let element = e.target;
+        if (element.matches('#toggleListPanel')) {
+            e.preventDefault();
+            if (!element.dataset.disabled) {
+                listPanel.classList.remove('hidden');
+                singlePanel.classList.add('hidden');
+                scrollToNoticesListTop();
+                history.pushState({id: null}, null, element.href);
+            }
+        }
+        // On click on links leading to single page
+        if (element.matches('.redNoticeItem__labelText, .redNoticeItem__labelText *')) {
+            e.preventDefault();
+            if (!element.dataset.disabled) {
+                let link = element.closest('a');
+                let url = link.dataset.singleurl;
+                getApiResponse(url, function (data) {
+                    fillAndDisplaySingleTemplate(data);
+                    // TODO : pretty animation ?
+                    listPanel.classList.add('hidden');
+                    singlePanel.classList.remove('hidden');
+                    window.scrollTo(0, 0);
+                    history.pushState({id: data.entity_id}, null, link.href);
+                });
+            }
+        }
+    }, false);
+}
+
+// Building url parameters for the API call
+function getApiUrlParameters(form) {
+    let params = '?';
+    let inputList = Array.from(form.querySelectorAll("input, select, textarea"));
+    inputList.forEach(function (node) {
+        if(node.value) {
+            if (node.type === 'radio') {
+                if (node.checked) {
+                    params = params + "&" + node.getAttribute('name') + "=" + node.value;
+                }
+            } else {
+                params = params + "&" + node.getAttribute('name') + "=" + node.value.replaceAll('-', '%2F');
+            }
+        }
+    });
+    return params;
+}
+
+// API call
+function getApiResponse(url, success) {
+    // let xhr = window.XMLHttpRequest ? new XMLHttpRequest() : new ActiveXObject('Microsoft.XMLHTTP');
+    let xhr = window.XMLHttpRequest ? new XMLHttpRequest() : new XDomainRequest();
+    xhr.open('GET', url);
+    xhr.onreadystatechange = function () {
+        if (xhr.readyState > 3 && xhr.status == 200) {success(JSON.parse(xhr.responseText));}
+    };
+    xhr.send();
+    return xhr;
+}
+
+// Managing list API results
+function fillAndDisplayListTemplate(jsonData) {
+
+    // Fill global elements : results counter
+    let total = jsonData.total;
+    /*if(parseInt(total) > 160){
+        total = "160";
+    }*/
+    listPanel.querySelector('#searchResults').textContent = total;
+
+    // If we have results
+    if (jsonData.total > 0) {
+        // Switch the result-count/no-result displays
+        listPanel.querySelector('#noSearchResults').classList.add('hidden');
+        listPanel.querySelector('#countSearchResults').classList.remove('hidden');
+
+        // Test to see if the browser supports the HTML template element by checking
+        // for the presence of the template element's content attribute.
+        if ('content' in document.createElement('template')) {
+
+            // Instantiate the container with the existing HTML container and the content with the template
+            let listResultsTemplate = document.querySelector('#listResultsTemplate');
+
+            // Remove old existing data
+            while (noticesResultsItemList.firstChild) {
+                noticesResultsItemList.removeChild(noticesResultsItemList.firstChild);
+            }
+
+            // For each notice
+            let notices = jsonData._embedded.notices;
+
+            for (let i = 0; i < notices.length; i++) {
+                // Clone a new result panel
+                let listClone = document.importNode(listResultsTemplate.content, true);
+
+                // Thumbnail display
+                let singleimage = listClone.querySelector('.redNoticeItem__img');
+
+                if(notices[i]._links.thumbnail!= undefined) {
+                    if(notices[i]._links.thumbnail.href !== undefined && notices[i]._links.thumbnail.href !== null) {
+                        singleimage.src = notices[i]._links.thumbnail.href;
+
+                    }
+                }
+
+
+                // Name display
+                let label = listClone.querySelector('.redNoticeItem__labelLink');
+                if (notices[i]._links.self !== undefined) {
+                    label.href = '#' + notices[i].entity_id.replace('/', '-');
+                    label.dataset.singleurl = notices[i]._links.self.href;
+                }
+
+
+                if(notices[i].name != undefined ){
+                    label.innerHTML = notices[i].name;
+                }
+                if(notices[i].forename != undefined ){
+                    label.innerHTML += '</br>' + notices[i].forename;
+                }
+
+
+                // Age display
+                if (notices[i].date_of_birth !== undefined && notices[i].date_of_birth !== null) {
+                    listClone.querySelector('.redNoticeItem__standardText .age .ageCount').textContent = getAge(notices[i].date_of_birth);
+                } else {
+                    listClone.querySelector('.redNoticeItem__standardText .age').remove();
+                }
+
+                // Nationalities display
+                if (notices[i].nationalities !== undefined && notices[i].nationalities !== null) {
+                    let nat = listClone.querySelector('.redNoticeItem__standardText .nationalities');
+                    for (let j = 0; j < notices[i].nationalities.length; j++) {
+                        nat.textContent += references.countries[notices[i].nationalities[j]];
+                        if (notices[i].nationalities.length !== 1 && j !== (notices[i].nationalities.length - 1)) {
+                            nat.textContent += ', ';
+                        }
+                    }
+                }
+
+                // Insert the clone into the container
+                noticesResultsItemList.appendChild(listClone);
+            }
+
+
+            // Fill global elements : pagination
+            let paginationTemplate = document.querySelector('#paginationTemplate');
+            let paginationClone = document.importNode(paginationTemplate.content, true);
+
+            let cTotal = parseInt(jsonData.total);
+            if(cTotal > 160){
+                cTotal = 160;
+                listPanel.querySelector('#limitedResults').classList.remove('hidden');
+            }
+            else {
+                listPanel.querySelector('#limitedResults').classList.add('hidden');
+            }
+            let pTotal = Math.ceil(cTotal / parseInt(jsonData.query.resultPerPage));
+            let url = new URL(jsonData._links.self.href);
+            let pageIndex = parseInt(jsonData.query.page);
+            let extremes = 2, neighbours = 3, insertFirstEllipse = true, insertLastEllipse = true;
+            let newPaginationLink;
+
+            // Remove old existing pagination data
+            while (paginationPanel.firstChild) {
+                paginationPanel.removeChild(paginationPanel.firstChild);
+            }
+
+            // If we have more than one page of results
+            if (pTotal > 1) {
+                for (i = 1; i <= pTotal; i++)
+                {
+                    url.searchParams.set('page', i);
+                    if (pageIndex !== 1 && i === 1) {
+                        paginationClone.querySelector('.prevElement').classList.remove('hidden');
+                        paginationClone.querySelector('.prevIndex').href = jsonData._links.previous.href;
+                    }
+                    if (i < pageIndex) {
+                        if ((i <= extremes && i < pageIndex - neighbours) || (i >= pageIndex - neighbours && i < pageIndex)) {
+                            newPaginationLink = createPaginationLink(url.href, i);
+                            paginationClone.querySelector('ul').insertBefore(newPaginationLink, paginationClone.querySelector('.nextElement'));
+                        } else {
+                            if (extremes + 1 < pageIndex - neighbours && insertFirstEllipse) {
+                                newPaginationLink = document.createElement("li");
+                                newPaginationLink.classList.add('firstHalf', 'counter__ellipse');
+                                newPaginationLink.textContent = '...';
+                                paginationClone.querySelector('ul').insertBefore(newPaginationLink, paginationClone.querySelector('.nextElement'));
+                                insertFirstEllipse = false;
+                            }
+                        }
+                    }
+                    if (i === pageIndex) {
+                        newPaginationLink = createPaginationLink(url.href, i, true);
+                        paginationClone.querySelector('ul').insertBefore(newPaginationLink, paginationClone.querySelector('.nextElement'));
+                    }
+                    if (pageIndex < pTotal && i > pageIndex) {
+                        if ((i > pageIndex && i <= pageIndex + neighbours) || (i > pageIndex + neighbours && i > pTotal - extremes)) {
+                            newPaginationLink = createPaginationLink(url.href, i);
+                            paginationClone.querySelector('ul').insertBefore(newPaginationLink, paginationClone.querySelector('.nextElement'));
+                        } else {
+                            if (pTotal - extremes > pageIndex + neighbours && insertLastEllipse) {
+                                newPaginationLink = document.createElement("li");
+                                newPaginationLink.classList.add('lastHalf', 'counter__ellipse');
+                                newPaginationLink.textContent = '...';
+                                paginationClone.querySelector('ul').insertBefore(newPaginationLink, paginationClone.querySelector('.nextElement'));
+                                insertLastEllipse = false;
+                            }
+                        }
+                    }
+                    if (pageIndex !== pTotal && i === pTotal) {
+                        paginationClone.querySelector('.nextElement').classList.remove('hidden');
+                        paginationClone.querySelector('.nextIndex').href = jsonData._links.next.href;
+                    }
+                }
+
+                // Insert the clone into the container
+                paginationPanel.appendChild(paginationClone);
+            }
+        }
+    } else {
+        // Switch the result-count/no-result displays
+        listPanel.querySelector('#countSearchResults').classList.add('hidden');
+        listPanel.querySelector('#noSearchResults').classList.remove('hidden');
+
+        // Remove old existing data
+        while (noticesResultsItemList.firstChild) {
+            noticesResultsItemList.removeChild(noticesResultsItemList.firstChild);
+        }
+
+         while (paginationPanel.firstChild) {
+            paginationPanel.removeChild(paginationPanel.firstChild);
+        }
+    }
+}
+
+// Managing single API result
+function fillAndDisplaySingleTemplate(jsonData) {
+    // Test to see if the browser supports the HTML template element by checking
+    // for the presence of the template element's content attribute.
+    if ('content' in document.createElement('template')) {
+
+        // Instantiate the container with the existing HTML container and the content with the template
+        let singlePanelTemplate = document.querySelector('#singlePanelTemplate');
+
+        // Clone the new panel
+        let singleClone = document.importNode(singlePanelTemplate.content, true);
+
+        // Banner : Name display
+        let bannerName = singleClone.querySelector('.bannerWantedSingle__title');
+
+
+        if(jsonData.name !== undefined && jsonData.name !== null){
+            bannerName.textContent = jsonData.name;
+        }
+
+        if(jsonData.forename !== undefined && jsonData.forename !== null){
+            bannerName.textContent += ', ' + jsonData.forename;
+        }
+
+
+
+        // Banner : Wanted by display
+        let displayWantedBy = false;
+        if (jsonData.arrest_warrants !== undefined) {
+            let bannerWantedBy = singleClone.querySelector('.bannerWantedSingle__wantedBy strong');
+            let arrayWantedBy = [];
+            for (let i = 0; i < jsonData.arrest_warrants.length; i++) {
+                if (jsonData.arrest_warrants[i].issuing_country_id !== undefined
+                    && jsonData.arrest_warrants[i].issuing_country_id !== null) {
+                    displayWantedBy = true;
+                    let countryString = references.countries[jsonData.arrest_warrants[i].issuing_country_id];
+                    if (arrayWantedBy.find(function(elt){return elt === countryString;}) === undefined) {
+                        arrayWantedBy.push(countryString);
+                    }
+                }
+            }
+            bannerWantedBy.textContent = arrayWantedBy.join(', ');
+        }
+        if (!displayWantedBy) {
+            singleClone.querySelector('.bannerWantedSingle__wantedBy').classList.add('hidden');
+        }
+
+        //test url notice
+
+        let url = jsonData._links.self.href;
+
+        let array = url.split(/v+(\d)+\//);
+
+        let array2 = array[1].split("/");
+
+        let typenot = array2[0];
+
+        let logonoticegood= singleClone.querySelector('.redNoticeLargePhoto__img');
+
+         if(typenot =="un"){
+             logonoticegood.src="/bundles/interpolfront/images/un_entitiesnotice_big.png";
+        }
+        else if(typenot =="red"){
+             logonoticegood.src="/bundles/interpolfront/images/rednotice_big.png";
+        }
+        else if(typenot =="yellow"){
+             logonoticegood.src="/bundles/interpolfront/images/yellownotice_big.png";
+        }
+
+        // Images display
+        let firstImage = singleClone.querySelector('.redNoticeLargePhoto__wrapperImg');
+        let images = singleClone.querySelector('.wantedsingle__wrapperOtherPhotos');
+        let imgClick = [];
+        if (jsonData._links.images !== undefined) {
+            // We get all the images via the API
+            getApiResponse(jsonData._links.images.href, function (imgData) {
+                if(imgData._embedded.images.length > 0){
+                    for (let i = 0; i < imgData._embedded.images.length; i++) {
+                        let image = document.createElement("img");
+                        image.src = imgData._embedded.images[i]._links.self.href;
+                        image.alt = jsonData.name + ', ' + jsonData.forename;
+                        image.width = '184';
+                        image.height = '238';
+                        if (i === 0) {
+                            image.classList.add('redNoticeLargePhoto__img');
+                            firstImage.appendChild(image);
+                            var savefirst = image;
+                        } else {
+                            let div = document.createElement("div");
+                            div.classList.add('wantedsingle__otherPhotos');
+                            image.classList.add('wantedsingle__otherPhotosImage');
+                            imgClick.push(image);
+                            div.appendChild(image);
+                            images.appendChild(div);
+                        }
+                    }
+                    if(imgData._embedded.images.length > 1){
+                        for(let j=0; j<imgClick.length; j++) {
+                            imgClick[j].addEventListener('click', function (e) {
+                                let savesrc = savefirst.src;
+                                savefirst.src = this.src;
+                                this.src = savesrc;
+                            });
+                        }
+                    }
+                }
+                else {
+                    let image = document.createElement("img");
+                    image.src = document.querySelector('.redNoticeLargePhoto__wrapperNotice').dataset.defaultimage;
+                    image.alt = jsonData.name + ', ' + jsonData.forename;
+                    image.width = '184';
+                    image.height = '238';
+                    image.classList.add('redNoticeLargePhoto__img');
+                    firstImage.appendChild(image);
+                }
+            });
+        }
+
+        else {
+            let image = document.createElement("img");
+            image.src = "/bundles/interpolfront/images/photo-not-available.png";
+            image.alt = jsonData.name + ', ' + jsonData.forename;
+            image.width = '184';
+            image.height = '238';
+            image.classList.add('redNoticeLargePhoto__img');
+            firstImage.appendChild(image);
+        }
+
+
+        // Name & Gender data
+        singleClone.querySelector('#name').textContent = jsonData.name;
+        if (jsonData.name == undefined && jsonData.name == null) {
+            singleClone.querySelector('#name').parentElement.parentElement.classList.add('hidden');
+        }
+
+        singleClone.querySelector('#forename').textContent = jsonData.forename;
+
+        // forename can be empty -> hide <tr> element
+        if (jsonData.forename == undefined && jsonData.forename == null) {
+            singleClone.querySelector('#forename').parentElement.parentElement.classList.add('hidden');
+        }
+
+        if (jsonData.sex_id !== undefined && jsonData.sex_id !== null) {
+            singleClone.querySelector('#sex_id .' + jsonData.sex_id).classList.remove('hidden');
+        }
+        else {
+            //hide <tr> element
+            singleClone.querySelector('#sex_id').parentElement.parentElement.classList.add('hidden');
+        }
+
+        // Birth date data
+        if (jsonData.date_of_birth !== undefined && jsonData.date_of_birth !== null) {
+            singleClone.querySelector('#date_of_birth').textContent = birthDate(jsonData.date_of_birth);
+            singleClone.querySelector('#date_of_birth + strong .ageCount').textContent = getAge(jsonData.date_of_birth);
+        //     singleClone.querySelector('#date_of_birth').textContent = '/';
+        }
+        else {
+            //hide <tr> element
+            singleClone.querySelector('#date_of_birth').parentElement.parentElement.classList.add('hidden');
+        }
+
+        //we have to test if place AND country are empty to hide the line
+        // Birth place data
+        let showBirthPlaceDetails = false; //test place of birth is empty
+        singleClone.querySelector('#country_of_birth_id').textContent = '';
+        if (jsonData.place_of_birth !== undefined && jsonData.place_of_birth !== null) {
+            showBirthPlaceDetails = true;
+            singleClone.querySelector('#place_of_birth').textContent = jsonData.place_of_birth;
+            singleClone.querySelector('#country_of_birth_id').textContent = ', ';
+        }
+        else {
+            showBirthPlaceDetails = false;
+        }
+        let showBirthCountryDetails = false; //test country of birth is empty
+        if (jsonData.country_of_birth_id !== undefined && jsonData.country_of_birth_id !== null) {
+            showBirthCountryDetails = true;
+            singleClone.querySelector('#country_of_birth_id').textContent += references.countries[jsonData.country_of_birth_id];
+        } else {
+            showBirthCountryDetails = false;
+            singleClone.querySelector('#country_of_birth_id').textContent = '';
+        }
+        // if both are empty, get the <tr> parent element from <span> id
+        if(!showBirthPlaceDetails && !showBirthCountryDetails){
+            singleClone.querySelector('#place_of_birth').parentElement.parentElement.parentElement.classList.add('hidden');
+        }
+
+        //Country registration data
+        if (jsonData.country_of_registration !== undefined && jsonData.country_of_registration !== null) {
+            singleClone.querySelector('#country_registration').textContent = references.countries[jsonData.country_of_registration];
+        }
+        else {
+            //hide <tr> element
+            singleClone.querySelector('#country_registration').parentElement.parentElement.classList.add('hidden');
+        }
+
+        //Main activity data
+        if (jsonData.main_activity !== undefined && jsonData.main_activity !== null) {
+            singleClone.querySelector('#main_activity').textContent = jsonData.main_activity;
+        }
+        else {
+            //hide <tr> element
+            singleClone.querySelector('#main_activity').parentElement.parentElement.classList.add('hidden');
+        }
+
+        //Legal form data
+        if (jsonData.legal_form !== undefined && jsonData.legal_form !== null) {
+            singleClone.querySelector('#legal_form').textContent = jsonData.legal_form;
+        }
+        else {
+            //hide <tr> element
+            singleClone.querySelector('#legal_form').parentElement.parentElement.classList.add('hidden');
+        }
+
+        //Chamber commerce data
+        if (jsonData.from_chamber_of_commerce !== undefined && jsonData.from_chamber_of_commerce !== null) {
+            singleClone.querySelector('#chamber_commerce').textContent = jsonData.from_chamber_of_commerce;
+        }
+        else {
+            //hide <tr> element
+            singleClone.querySelector('#chamber_commerce').parentElement.parentElement.classList.add('hidden');
+        }
+
+        //Created on data
+        if (jsonData.created_on !== undefined && jsonData.created_on !== null) {
+            singleClone.querySelector('#created_on').textContent = birthDate(jsonData.created_on);
+        }
+        else {
+            //hide <tr> element
+            singleClone.querySelector('#created_on').parentElement.parentElement.classList.add('hidden');
+        }
+
+        //Created on data
+        if (jsonData.registration_number !== undefined && jsonData.registration_number !== null) {
+            singleClone.querySelector('#registration_number').textContent = jsonData.registration_number;
+        }
+        else {
+            //hide <tr> element
+            singleClone.querySelector('#registration_number').parentElement.parentElement.classList.add('hidden');
+        }
+
+        if (jsonData.also_known_as !== undefined && jsonData.also_known_as !== null) {
+            singleClone.querySelector('#also_known_as').textContent = jsonData.also_known_as;
+        }
+        else {
+            //hide <tr> element
+            singleClone.querySelector('#also_known_as').parentElement.parentElement.classList.add('hidden');
+        }
+
+        // Birth name data
+        if (jsonData.birth_name !== undefined && jsonData.birth_name !== null) {
+            singleClone.querySelector('#birth_name').textContent = jsonData.birth_name;
+        }
+        else {
+            //hide <tr> element
+            singleClone.querySelector('#birth_name').parentElement.parentElement.classList.add('hidden');
+        }
+
+        // Father name & forename data
+        let showFatherDetails = false;
+        if (jsonData.father_name !== undefined && jsonData.father_name !== null) {
+            showFatherDetails = true;
+            singleClone.querySelector('#father_name').textContent = jsonData.father_name;
+        }
+        if (jsonData.father_forename !== undefined && jsonData.father_forename !== null) {
+            showFatherDetails = true;
+            singleClone.querySelector('#father_name').textContent += ' '+jsonData.father_forename;
+        }
+        //father name and forename have to be empty to hide <tr> element
+        if((jsonData.father_name == undefined || jsonData.father_name == null) && (jsonData.father_forename == undefined || jsonData.father_forename == null)){
+            showFatherDetails = false;
+            singleClone.querySelector('#father_name').parentElement.parentElement.classList.add('hidden');
+        }
+
+        // Mother name & forename name data
+        let showMotherDetails = false;
+        if (jsonData.mother_name !== undefined && jsonData.mother_name !== null) {
+            showMotherDetails = true;
+            singleClone.querySelector('#mother_name').textContent = jsonData.mother_name;
+        }
+        if (jsonData.mother_forename !== undefined && jsonData.mother_forename !== null) {
+            showMotherDetails = true;
+            singleClone.querySelector('#mother_name').textContent += ' '+jsonData.mother_forename;
+        }
+        //mother name and forename have to be empty to hide <tr> element
+        if((jsonData.mother_name == undefined || jsonData.mother_name == null) && (jsonData.mother_forename == undefined || jsonData.mother_forename == null)){
+            showMotherDetails = false;
+            singleClone.querySelector('#mother_name').parentElement.parentElement.classList.add('hidden');
+        }
+
+        // Profession data
+        let showProfessionDetails = false;
+        if (jsonData.profession !== undefined && jsonData.profession !== null) {
+            showProfessionDetails = true;
+            singleClone.querySelector('#profession').textContent = jsonData.profession;
+        }
+        else {
+            //hide <tr> element
+            showProfessionDetails = false;
+            singleClone.querySelector('#profession').parentElement.parentElement.classList.add('hidden');
+        }
+
+        // adresses data
+        let showAdressesDetails = false;
+        if (jsonData.adresses !== undefined && jsonData.adresses !== null) {
+            showAdressesDetails = true;
+            let addr = singleClone.querySelector('#adresses');
+            for (let i = 0; i < jsonData.adresses.length; i++) {
+                addr.textContent += jsonData.adresses[i];
+                if (jsonData.adresses.length !== 1 && i !== (jsonData.adresses.length - 1)) {
+                    addr.textContent += ', ';
+                }
+            }
+        }
+        else {
+            //hide <tr> element
+            showAdressesDetails = false;
+            singleClone.querySelector('#adresses').parentElement.parentElement.classList.add('hidden');
+        }
+
+        // Languages data
+        let showLanguagesDetails = false;
+        if (jsonData.languages_spoken_ids !== undefined && jsonData.languages_spoken_ids !== null) {
+            showLanguagesDetails = true;
+            let lang = singleClone.querySelector('#languages_spoken_ids');
+            for (let i = 0; i < jsonData.languages_spoken_ids.length; i++) {
+                lang.textContent += references.language[jsonData.languages_spoken_ids[i]];
+                if (jsonData.languages_spoken_ids.length !== 1 && i !== (jsonData.languages_spoken_ids.length - 1)) {
+                    lang.textContent += ', ';
+                }
+            }
+        }
+        else {
+            //hide <tr> element
+            showLanguagesDetails = false;
+            singleClone.querySelector('#languages_spoken_ids').parentElement.parentElement.classList.add('hidden');
+        }
+
+        //father name & forename, mother name & forename, profession, addresses and languages have to be empty to hide the section
+        if(!showFatherDetails && !showMotherDetails && !showProfessionDetails && !showAdressesDetails && !showLanguagesDetails){
+            singleClone.querySelector('.detailsTitle').classList.add('hidden');
+            singleClone.querySelector('.detailsContent').classList.add('hidden');
+        }
+
+        // Place data
+        if (jsonData.place !== undefined && jsonData.place !== null) {
+            singleClone.querySelector('#place').textContent = jsonData.place;
+        }
+        else {
+            //hide <tr> element
+            singleClone.querySelector('#place').parentElement.parentElement.classList.add('hidden');
+        }
+
+        // Date of event data
+        if (jsonData.date_of_event !== undefined && jsonData.date_of_event !== null && jsonData.date_of_birth !== undefined && jsonData.date_of_birth !== null) {
+            singleClone.querySelector('#date_of_event').textContent = birthDate(jsonData.date_of_event);
+            singleClone.querySelector('#date_of_event + strong .ageCount').textContent = getAgeDiff(jsonData.date_of_birth, jsonData.date_of_event);
+        }
+        else {
+            //hide <tr> element
+            singleClone.querySelector('#date_of_event').parentElement.parentElement.classList.add('hidden');
+        }
+
+         if (jsonData.countries_likely_to_be_visited !== undefined && jsonData.countries_likely_to_be_visited !== null) {
+            let countrieslikelyvisited = singleClone.querySelector('#countriesLikelyToBeVisited');
+            for (let i = 0; i < jsonData.countries_likely_to_be_visited.length; i++) {
+                countrieslikelyvisited.textContent += references.countries[jsonData.countries_likely_to_be_visited[i]];
+                if (jsonData.countries_likely_to_be_visited.length !== 1 && i !== (jsonData.countries_likely_to_be_visited.length - 1)) {
+                    countrieslikelyvisited.textContent += ', ';
+                }
+            }
+        }
+        else {
+            //hide <tr> element
+            singleClone.querySelector('#countriesLikelyToBeVisited').parentElement.parentElement.classList.add('hidden');
+        }
+//
+        if (jsonData.issuing_country !== undefined && jsonData.issuing_country !== null) {
+            singleClone.querySelector('#issuingCountries').textContent += references.countries[jsonData.issuing_country];
+        }
+        else {
+            //hide <tr> element
+            singleClone.querySelector('#issuingCountries').parentElement.parentElement.classList.add('hidden');
+        }
+
+
+        // Distinguishing marks data
+        if (jsonData.distinguishing_marks !== undefined && jsonData.distinguishing_marks !== null) {
+            singleClone.querySelector('#distinguishing_marks').textContent = jsonData.distinguishing_marks;
+        }
+        else {
+            //hide <tr> element
+            singleClone.querySelector('#distinguishing_marks').parentElement.parentElement.classList.add('hidden');
+        }
+
+
+        // Name original script data
+        if (jsonData.name_in_original_script !== undefined && jsonData.name_in_original_script !== null) {
+            singleClone.querySelector('#name_in_original_script').textContent = jsonData.name_in_original_script;
+        }
+        else {
+            //hide <tr> element
+            singleClone.querySelector('#name_in_original_script').parentElement.parentElement.classList.add('hidden');
+        }
+        // Forename original script data
+        if (jsonData.forename_in_original_script !== undefined && jsonData.forename_in_original_script !== null) {
+            singleClone.querySelector('#forename_in_original_script').textContent = jsonData.forename_in_original_script;
+        }
+        else {
+            //hide <tr> element
+            singleClone.querySelector('#forename_in_original_script').parentElement.parentElement.classList.add('hidden');
+        }
+
+        // Nationalities data
+        if (jsonData.nationalities !== undefined && jsonData.nationalities !== null) {
+            let nat = singleClone.querySelector('#nationalities');
+            for (let i = 0; i < jsonData.nationalities.length; i++) {
+                nat.textContent += references.countries[jsonData.nationalities[i]];
+                if (jsonData.nationalities.length !== 1 && i !== (jsonData.nationalities.length - 1)) {
+                    nat.textContent += ', ';
+                }
+            }
+        }
+        else {
+            //hide <tr> element
+            singleClone.querySelector('#nationalities').parentElement.parentElement.classList.add('hidden');
+        }
+
+
+        //leadership data
+        let displayLeadershipDescription = false;
+        if (jsonData.administrators !== undefined && jsonData.administrators !== null && jsonData.administrators.length) {
+            displayLeadershipDescription = true;
+            let leader = document.querySelector('#singleLeaderPanelTemplate');
+            let ld = singleClone.querySelector("#leadership");
+
+            for (let i = 0; i < jsonData.administrators.length; i++) {
+                let clone = document.importNode(leader.content, true);
+                let linkinfos= "";
+
+                if (jsonData.administrators[i].name !== undefined && jsonData.administrators[i].name != null) {
+                    linkinfos += " "+jsonData.administrators[i].name;
+                }
+
+                if (jsonData.administrators[i].forename !== undefined && jsonData.administrators[i].forename != null) {
+                    linkinfos += " "+jsonData.administrators[i].forename;
+                }
+
+                if (jsonData.administrators[i].date_of_birth !== undefined && jsonData.administrators[i].date_of_birth != null) {
+                    linkinfos += " "+birthDate(jsonData.administrators[i].date_of_birth);
+                }
+
+                if (jsonData.administrators[i].reference_number !== undefined && jsonData.administrators[i].reference_number != null) {
+                    linkinfos += " ("+jsonData.administrators[i].reference_number+")";
+                }
+
+                clone.querySelector('#link_infos').textContent = linkinfos;
+
+
+                ld.appendChild(clone);
+            }
+        }
+        else {
+            singleClone.querySelector('#leadership').classList.add('hidden');
+        }
+        //test to hide the section
+        if (!displayLeadershipDescription) {
+            singleClone.querySelector('.leadershipTitle').classList.add('hidden');
+            singleClone.querySelector('.leadershipContents').classList.add('hidden');
+        }
+
+        // Links data
+        let displayLinksDescription = false;
+        if (jsonData._embedded !== undefined && jsonData._embedded !== null) {
+            //_embedded.links peut contenir un tableau vide
+            if (jsonData._embedded.links !== undefined && jsonData._embedded.links !== null && jsonData._embedded.links.length) {
+
+                let photodisplaylist = Array();
+
+                for (let i = 0; i < jsonData._embedded.links.length; i++) {
+
+                    if (jsonData._embedded.links[i]._links.self.href !== undefined ) {
+
+                        getApiResponse(jsonData._embedded.links[i]._links.self.href+"/images", function (resp) {
+
+                            if (resp._embedded.images !== undefined &&  resp._embedded.images.length !== 0) {
+
+                                photodisplaylist.push(resp._embedded.images[0]._links.self.href);
+                            }
+
+                        });
+
+                    }
+                    else{
+                        photodisplaylist.push("null");
+                    }
+
+                }
+
+                //tests en tout genre pour ne pas remonter des objets sans contenu
+                if(jsonData._embedded.links[0] !== undefined && jsonData._embedded.links[0] !== null && jsonData._embedded.links[0]._links !== undefined) {
+
+                    displayLinksDescription = true;
+                    let link = document.querySelector('#singleLinkPanelTemplate');
+                    let lk = singleClone.querySelector("#links");
+
+                    setTimeout(function(){
+                        for (let i = 0; i < jsonData._embedded.links.length; i++) {
+                            let listClone = document.importNode(link.content, true);
+
+                            // Thumbnail display
+                            let thumbnail = listClone.querySelector('.redNoticeItem__img');
+
+                            // Thumbnail.src
+                            if(photodisplaylist[i] != "null" && photodisplaylist[i] !== undefined){
+                                thumbnail.src = photodisplaylist[i];
+                            }
+
+                            thumbnail.alternate = jsonData._embedded.links[i].forename + ' ' + jsonData._embedded.links[i].name;
+
+                            // Name display
+                            let label = listClone.querySelector('.redNoticeItem__labelLink');
+
+                            if (jsonData._embedded.links[i]._links.self !== undefined) {
+                                label.dataset.singleurl = jsonData._embedded.links[i]._links.self.href;
+                            }
+
+                            label.innerHTML="";
+                            if(jsonData._embedded.links[i].name !== undefined ){
+                                label.innerHTML = jsonData._embedded.links[i].name;
+                            }
+                            if(jsonData._embedded.links[i].forename !== undefined ){
+                                label.innerHTML += '</br>' + jsonData._embedded.links[i].forename;
+                            }
+
+
+                            let typeofnotice = listClone.querySelector('.redNoticeItem__redNoticeSmallImg');
+                            //test type of notice
+                            if(jsonData._embedded.links[i].color !== undefined){
+
+                                if(jsonData._embedded.links[i].color =="UN"){
+                                    typeofnotice.src="/bundles/interpolfront/images/un_entitiesnotice.png";
+                                }
+                                else if(jsonData._embedded.links[i].color =="RED"){
+                                    typeofnotice.src="/bundles/interpolfront/images/rednotice.png";
+                                }
+                                else if(jsonData._embedded.links[i].color =="YELLOW"){
+                                    typeofnotice.src="/bundles/interpolfront/images/yellownotice.png";
+                                }
+                            }
+
+                            lk.appendChild(listClone);
+                        }
+                    }, 500);
+                }
+            }
+            else {
+                displayLinksDescription = false;
+            }
+        }
+        else {
+            displayLinksDescription = false;
+            singleClone.querySelector('#links').classList.add('hidden');
+        }
+        //test to hide the section
+        if (!displayLinksDescription) {
+            singleClone.querySelector('.linksTitle').classList.add('hidden');
+            singleClone.querySelector('.linksContent').classList.add('hidden');
+        }
+
+        //associates data
+        let displayAssociatesDescription = false;
+        if (jsonData.associates !== undefined && jsonData.associates !== null && jsonData.associates.length > 0 ) {
+            displayAssociatesDescription = true;
+            let assoc = document.querySelector('#singleLeaderPanelTemplate');
+            let ass = singleClone.querySelector("#associates");
+
+            for (let i = 0; i < jsonData.associates.length; i++) {
+                let clone = document.importNode(assoc.content, true);
+
+                let linkinfos= "";
+
+                if (jsonData.associates[i].name !== undefined && jsonData.associates[i].name != null) {
+                    linkinfos += " "+jsonData.associates[i].name;
+                }
+
+                if (jsonData.associates[i].forename !== undefined && jsonData.associates[i].forename != null) {
+                    linkinfos += " "+jsonData.associates[i].forename;
+                }
+
+                if (jsonData.associates[i].date_of_birth !== undefined && jsonData.associates[i].date_of_birth != null) {
+                    linkinfos += " "+birthDate(jsonData.associates[i].date_of_birth);
+                }
+
+                if (jsonData.associates[i].reference_number !== undefined && jsonData.associates[i].reference_number != null) {
+                    linkinfos += " ("+jsonData.associates[i].reference_number+")";
+                }
+
+                clone.querySelector('#link_infos').textContent = linkinfos;
+
+                ass.appendChild(clone);
+            }
+        }
+        else {
+            displayAssociatesDescription = false;
+            singleClone.querySelector('#associates').classList.add('hidden');
+        }
+        //test to hide the section
+        if (!displayAssociatesDescription) {
+            singleClone.querySelector('.associatesTitle').classList.add('hidden');
+            singleClone.querySelector('.associatesContent').classList.add('hidden');
+        }
+
+        //UN Sanction
+        if(jsonData.un_resolution !== undefined && jsonData.un_resolution !== null){
+            let textsanction = references.resolutions_desc[jsonData.un_resolution];
+
+            let un_reference = "";
+            if(jsonData.un_reference !== undefined && jsonData.un_reference !== null){
+                un_reference = jsonData.un_reference;
+            }
+
+            let list_sanction = "";
+            if (jsonData.purposes !== undefined && jsonData.purposes !== null) {
+
+                for (let i = 0; i < jsonData.purposes.length; i++) {
+
+                    list_sanction += '<br/> &bull; '+ references.product_purpose[jsonData.purposes[i]];
+
+                }
+            }
+
+            textsanction = textsanction.replace("{{UN_SANCTIONS_LIST}}",list_sanction);
+
+            textsanction = textsanction.replace("{{UN_REFERENCE_NUMBER}}", "<strong>"+ un_reference +"</strong>");
+
+            textsanction +="<br/><br/>"+references.resolutions_links[jsonData.un_resolution];
+
+            singleClone.querySelector("#textsanction").innerHTML = textsanction;
+        }
+        else{
+            singleClone.querySelector('.UNSanctionTitle').classList.add('hidden');
+            singleClone.querySelector('.sanctionsContent').classList.add('hidden');
+        }
+
+        // Summary data
+        let displaySummaryDescription = false;
+
+        if (jsonData.un_reference_date !== undefined && jsonData.un_reference_date !== null) {
+            displaySummaryDescription = true;
+            singleClone.querySelector('#dateoflisting').textContent = birthDate(jsonData.un_reference_date);
+        }
+        else {
+            displaySummaryDescription = false;
+            singleClone.querySelector('#dateoflisting').classList.add('hidden');
+        }
+
+        if (jsonData.summary !== undefined && jsonData.summary !== null) {
+            displaySummaryDescription = true;
+            singleClone.querySelector('#summary').textContent = jsonData.summary;
+        }
+        else {
+            displaySummaryDescription = false;
+            singleClone.querySelector('#purposes .summary').classList.add('hidden');
+        }
+        //test to hide the section (summary and pruposes have to be empty)
+        if (!displaySummaryDescription ) {
+            singleClone.querySelector('.summaryTitle').classList.add('hidden');
+            singleClone.querySelector('.summaryContent').classList.add('hidden');
+        }
+
+        // Aliases data
+        let displayAkaDescription = false;
+        let nicknames= "";
+        if (jsonData.aliases !== undefined && jsonData.aliases !== null && jsonData.aliases.length) {
+            displayAkaDescription = true;
+            let alias = document.querySelector('#singleAliasPanelTemplate');
+            let tb = singleClone.querySelector("#alias");
+
+            for (let i = 0; i < jsonData.aliases.length; i++) {
+                let clone = document.importNode(alias.content, true);
+                if(jsonData.aliases[i].qualification!== undefined && jsonData.aliases[i].qualification != null  && jsonData.aliases[i].qualification == "ALIAS")
+                {
+
+                    if(jsonData.aliases[i].name !== undefined && jsonData.aliases[i].name != null) {
+                        clone.querySelector('#alias_name').textContent = jsonData.aliases[i].name;
+                    }
+                    else {
+                        clone.querySelector('#alias_name').parentElement.parentElement.classList.add('hidden');
+                    }
+                    if(jsonData.aliases[i].forename !== undefined && jsonData.aliases[i].forename != null) {
+                        clone.querySelector('#alias_forename').textContent = jsonData.aliases[i].forename;
+                    }
+                    else {
+                        clone.querySelector('#alias_forename').parentElement.parentElement.classList.add('hidden');
+                    }
+                    if(jsonData.aliases[i].name_in_original_script !== undefined && jsonData.aliases[i].name_in_original_script != null) {
+                        clone.querySelector('#alias_name_in_original_script').textContent = jsonData.aliases[i].name_in_original_script;
+                    }
+                    else {
+                        clone.querySelector('#alias_name_in_original_script').parentElement.parentElement.classList.add('hidden');
+                    }
+                    if(jsonData.aliases[i].forename_in_original_script !== undefined && jsonData.aliases[i].forename_in_original_script != null) {
+                        clone.querySelector('#alias_forename_in_original_script').textContent = jsonData.aliases[i].forename_in_original_script;
+                    }
+                    else {
+                        clone.querySelector('#alias_forename_in_original_script').parentElement.parentElement.classList.add('hidden');
+                    }
+                    if(jsonData.aliases[i].place_of_birth !== undefined && jsonData.aliases[i].place_of_birth != null) {
+                        clone.querySelector('#alias_place_of_birth').textContent =  jsonData.aliases[i].place_of_birth;
+                        clone.querySelector('#alias_country_of_birth_id').textContent = ', ';
+                    }
+                    else {
+                        clone.querySelector('#alias_place_of_birth').parentElement.parentElement.parentElement.classList.add('hidden');
+                    }
+                    if(jsonData.aliases[i].country_of_birth_id !== undefined && jsonData.aliases[i].country_of_birth_id != null) {
+                        clone.querySelector('#alias_country_of_birth_id').textContent += references.countries[jsonData.aliases[i].country_of_birth_id];
+                    }
+                    else {
+                        clone.querySelector('#alias_country_of_birth_id').parentElement.parentElement.classList.add('hidden');
+                    }
+                    if(jsonData.aliases[i].date_of_birth !== undefined && jsonData.aliases[i].date_of_birth != null) {
+                        clone.querySelector('#alias_date_of_birth').textContent = birthDate(jsonData.aliases[i].date_of_birth);
+                    }
+                    else {
+                        clone.querySelector('#alias_date_of_birth').parentElement.parentElement.classList.add('hidden');
+                    }
+                    tb.appendChild(clone);
+
+                }
+                else{
+                    nicknames += "," + jsonData.aliases[i].name;
+                    nicknames= nicknames.substr(1);
+                }
+            }
+        }
+        else {
+            displayAkaDescription = false;
+            singleClone.querySelector('#alias').classList.add('hidden');
+        }
+
+        //test nicknames
+        if(nicknames.lenght > 0){
+            singleClone.querySelector('#nickname').textContent = nicknames;
+        }
+        else{
+            singleClone.querySelector('#nicknames').classList.add('hidden');
+        }
+
+
+        //test to hide the section
+        if (!displayAkaDescription) {
+            singleClone.querySelector('.alsoKnownAsTitle').classList.add('hidden');
+            singleClone.querySelector('.alsoKnownAsContent').classList.add('hidden');
+        }
+
+        // Physical description data
+        let displayHeightDescription = false;
+        if (jsonData.height !== null && jsonData.height !== 0 && jsonData.height !== undefined) {
+            displayHeightDescription = true;
+            singleClone.querySelector('#height .heightCount').textContent = jsonData.height;
+        }
+        else {
+            //hide <tr> element
+            displayHeightDescription = false;
+            singleClone.querySelector('#height').parentElement.parentElement.classList.add('hidden');
+        }
+        let displayWeightDescription = false;
+        if (jsonData.weight !== null && jsonData.weight !== 0 && jsonData.weight !== undefined) {
+            displayWeightDescription = true;
+            singleClone.querySelector('#weight .weightCount').textContent = jsonData.weight;
+        }
+        else {
+            //hide <tr> element
+            displayWeightDescription = false;
+            singleClone.querySelector('#weight').parentElement.parentElement.classList.add('hidden');
+        }
+        let displayHairDescription = false;
+        if (jsonData.hairs_id !== null && jsonData.hairs_id !== undefined) {
+            displayHairDescription = true;
+            let hairs = singleClone.querySelector('#hairs_id');
+            for (let i = 0; i < jsonData.hairs_id.length; i++) {
+                hairs.textContent += references.hair[jsonData.hairs_id[i]];
+                if (jsonData.hairs_id.length !== 1 && i !== (jsonData.hairs_id.length - 1)) {
+                    hairs.textContent += ', ';
+                }
+            }
+
+            //singleClone.querySelector('#hairs_id').textContent = references.hair[jsonData.hairs_id];
+        }
+        else {
+            //hide <tr> element
+            displayHairDescription = false;
+            singleClone.querySelector('#hairs_id').parentElement.parentElement.classList.add('hidden');
+        }
+        let displayEyesDescription = false;
+        if (jsonData.eyes_colors_id !== null && jsonData.eyes_colors_id !== undefined) {
+
+            displayEyesDescription = true;
+            let eyes_colors = singleClone.querySelector('#eyes_colors_id');
+            for (let i = 0; i < jsonData.eyes_colors_id.length; i++) {
+                eyes_colors.textContent += references.eyes[jsonData.eyes_colors_id[i]];
+                if (jsonData.eyes_colors_id.length !== 1 && i !== (jsonData.eyes_colors_id.length - 1)) {
+                    eyes_colors.textContent += ', ';
+                }
+            }
+
+        }
+        else {
+            //hide <tr> element
+            displayEyesDescription = false;
+            singleClone.querySelector('#eyes_colors_id').parentElement.parentElement.classList.add('hidden');
+        }
+        //test to hide the section
+        if (!displayHeightDescription && !displayWeightDescription && !displayHairDescription && !displayEyesDescription) {
+            singleClone.querySelector('.physicalDescriptionTitle').classList.add('hidden');
+            singleClone.querySelector('.physicalDescriptionContent').classList.add('hidden');
+        }
+
+        // Warrant data
+        let displayWarrantData = false;
+        let displayChargeTranslation = false;
+        if (jsonData.arrest_warrants !== undefined && jsonData.arrest_warrants !== null) {
+            let charge = singleClone.querySelector('#charge');
+            for (let i = 0; i < jsonData.arrest_warrants.length; i++) {
+                if (jsonData.arrest_warrants[i].charge !== undefined && jsonData.arrest_warrants[i].charge !== null) {
+                    displayWarrantData = true;
+                    charge.textContent += jsonData.arrest_warrants[i].charge;
+                    if (jsonData.arrest_warrants.length !== 1 && i !== (jsonData.arrest_warrants - 1)) {
+                        charge.textContent += ', ';
+                    }
+                }
+            }
+
+            let charge_translation = singleClone.querySelector('#chargetranslation');
+            for (let j = 0; j < jsonData.arrest_warrants.length; j++) {
+                if (jsonData.arrest_warrants[j].charge_translation !== undefined && jsonData.arrest_warrants[j].charge_translation !== null) {
+                    displayChargeTranslation = true;
+                    charge_translation.textContent += jsonData.arrest_warrants[j].charge_translation;
+                    if (jsonData.arrest_warrants.length !== 1 && j !== (jsonData.arrest_warrants - 1)) {
+                        charge_translation.textContent += ', ';
+                    }
+                }
+            }
+        }
+
+        if (!displayChargeTranslation) {
+            singleClone.querySelector('#chargetranslation').classList.add('hidden');
+        }
+
+        if (!displayWarrantData) {
+            singleClone.querySelector('.warrantTitle').classList.add('hidden');
+            singleClone.querySelector('.warrantContent').classList.add('hidden');
+        }
+
+        // Insert the clone into the container in place of the existing data
+        while (singlePanel.firstChild) {
+            singlePanel.removeChild(singlePanel.firstChild);
+        }
+        singlePanel.appendChild(singleClone);
+    }
+}
+
+// Creates a simple pagination link
+function createPaginationLink(url, index, disabled)
+{
+    if(disabled == undefined){
+        disabled = false;
+    }
+    let link = document.createElement("a");
+    link.href = url;
+    link.textContent = index;
+    if (disabled === true) {
+        link.dataset.disabled = "true";
+        link.classList.add('active');
+    }
+
+    let element = document.createElement("li");
+    element.appendChild(link);
+
+    return element;
+}
+
+// Age calculation
+function getAge(dateString) {
+    let today = new Date();
+    let birthDate = new Date(dateString);
+    let age = today.getFullYear() - birthDate.getFullYear();
+    let m = today.getMonth() - birthDate.getMonth();
+    if (m < 0 || (m === 0 && today.getDate() < birthDate.getDate())) {
+        age--;
+    }
+    return age;
+}
+
+function getAgeDiff(date_of_birth, date_of_event){
+    let birthDate = new Date(date_of_birth);
+    let eventDate = new Date(date_of_event);
+    let diff = eventDate.getFullYear() - birthDate.getFullYear();
+    let m = eventDate.getMonth() - birthDate.getMonth();
+    if (m < 0 || (m === 0 && eventDate.getDate() < birthDate.getDate())) {
+        diff--;
+    }
+    return diff;
+}
+
+// Format date of birth
+function birthDate(dateString) {
+    let birthDate = dateString.substr(8, 2)+'/'+dateString.substr(5, 2)+'/'+dateString.substr(0, 4);
+    return birthDate;
+}
+
+// handles scroll to the top of the notices list
+function scrollToNoticesListTop() {
+    document.getElementById('noticesTitleBlock').scrollIntoView();
+    window.scroll(0, window.scrollY - document.querySelector('.header').scrollHeight);
+}
+
+document.addEventListener('click', function (e) {
+    let element = e.target;
+    if (element.matches('#singlePanel .greySection .container a')) {
+        e.preventDefault();
+        let url = element.href;
+        //if (url.toLowerCase().includes('contacts/')) {
+            let anchor = document.URL.split('#');
+            if (anchor.length > 1 && anchor[1].length > 0) {
+                url += '?notice=' + anchor[1];
+                window.location=url;
+            }
+        //}
+    }
+
+}, false);
+document.onreadystatechange = () => {
+    if (document.readyState === "complete") {
+        var getLg = window.location.pathname.split('/');
+        jQuery('.input-daterange').datepicker({
+            format: "yyyy-mm-dd",
+            language: getLg[1],
+            endDate: "today",
+            clearBtn: true
+        });
+    }
+};
